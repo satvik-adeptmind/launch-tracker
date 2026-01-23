@@ -9,10 +9,11 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 import config
 
 # --- CONFIGURATION ---
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN") 
-REPO_URL = "github.com/satvik-adeptmind/launch-tracker.git" 
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "").strip()
+SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN", "").strip()
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+
+REPO_URL = "github.com/satvik-adeptmind/launch-tracker.git"
 
 CSV_FILE = "launches.csv"
 
