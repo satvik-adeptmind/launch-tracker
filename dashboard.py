@@ -2,17 +2,37 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
-import config # <--- IMPORT CONFIG
+import requests
+import io
+import os
+import config
+
+# --- CONFIGURATION ---
+# We need the token here too to read the private repo
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+# Raw URL format: https://raw.githubusercontent.com/USER/REPO/BRANCH/FILENAME
+CSV_URL = "https://raw.githubusercontent.com/satvik-adeptmind/launch-tracker/main/launches.csv"
 
 st.set_page_config(page_title="Adeptmind Launch Analytics", page_icon="🚀", layout="wide")
 
-# --- LOAD DATA ---
+# --- LOAD DATA FROM GITHUB ---
+@st.cache_data(ttl=60) # Cache data for 60 seconds to prevent spamming GitHub
 def load_data():
     try:
-        df = pd.read_csv("launches.csv")
-        df['Date'] = pd.to_datetime(df['Date'])
-        return df
-    except FileNotFoundError:
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        response = requests.get(CSV_URL, headers=headers)
+        
+        if response.status_code == 200:
+            csv_content = response.content.decode('utf-8')
+            df = pd.read_csv(io.StringIO(csv_content))
+            df['Date'] = pd.to_datetime(df['Date'])
+            return df
+        else:
+            st.error(f"Failed to load data from GitHub. Status: {response.status_code}")
+            return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
+            
+    except Exception as e:
+        st.error(f"Error loading data: {e}")
         return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
 
 df = load_data()
@@ -23,8 +43,7 @@ st.sidebar.header("🔍 Filters")
 # Time Filter
 time_frame = st.sidebar.selectbox("Time Period", ["This Week", "Last Week", "This Month", "All Time"])
 
-# Retailer Filter (Populated from CONFIG, not just CSV)
-# This ensures all 50 retailers are visible in the dropdown
+# Retailer Filter
 all_retailers_list = sorted(config.RETAILERS.keys())
 selected_retailers = st.sidebar.multiselect("Select Retailers", options=all_retailers_list, default=all_retailers_list)
 
@@ -50,11 +69,11 @@ if not df.empty:
     st.title(f"🚀 Dashboard: {time_frame}")
     
     # Top Metrics
-    total_pages = df_filtered['Page_Count'].sum()
+    total_pages = pd.to_numeric(df_filtered['Page_Count'], errors='coerce').fillna(0).sum()
     total_launches = len(df_filtered)
     
     m1, m2, m3 = st.columns(3)
-    m1.metric("Total Pages", f"{total_pages:,}")
+    m1.metric("Total Pages", f"{int(total_pages):,}")
     m2.metric("Total Launches", total_launches)
     m3.metric("Active Retailers", df_filtered['Retailer'].nunique())
     
@@ -66,17 +85,17 @@ if not df.empty:
     with c1:
         st.subheader("📊 Volume by Retailer")
         if not df_filtered.empty:
-            # Sort by volume
+            # Ensure Page_Count is numeric
+            df_filtered['Page_Count'] = pd.to_numeric(df_filtered['Page_Count'], errors='coerce').fillna(0)
+            
             chart_data = df_filtered.groupby('Retailer')['Page_Count'].sum().reset_index().sort_values('Page_Count', ascending=True)
             fig = px.bar(chart_data, x='Page_Count', y='Retailer', orientation='h', text_auto='.2s', title="Page Volume")
             st.plotly_chart(fig, use_container_width=True)
             
     with c2:
         st.subheader("ℹ️ Client Info")
-        # Show metadata for selected retailers (if only a few are selected)
         if len(selected_retailers) < 10:
             for r in selected_retailers:
-                # Get frequency from config, default to Monthly
                 freq = config.RETAILER_INFO.get(r, "Monthly")
                 st.info(f"**{r}**: {freq}")
         else:
@@ -90,4 +109,4 @@ if not df.empty:
         use_container_width=True
     )
 else:
-    st.info("No launches found for this period.")
+    st.info("No launches found for this period (or CSV is empty).")

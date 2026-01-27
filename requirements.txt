@@ -1,5 +1,6 @@
-streamlit
+slack-bolt
+slack-sdk
+PyGithub
 pandas
+streamlit
 plotly
-slack_bolt
-python-dotenv
