@@ -5,12 +5,12 @@ from datetime import datetime, timedelta
 import requests
 import io
 import os
-from github import Github, Auth # We need this to WRITE to GitHub
+from github import Github, Auth
 import config
 
 # --- CONFIGURATION ---
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-REPO_NAME = "satvik-adeptmind/launch-tracker" # Update if your repo name is different
+REPO_NAME = "satvik-adeptmind/launch-tracker" 
 CSV_FILE_PATH = "launches.csv"
 CSV_URL = f"https://raw.githubusercontent.com/satvik-adeptmind/launch-tracker/main/{CSV_FILE_PATH}"
 
@@ -44,25 +44,22 @@ def load_data():
 def save_data_to_github(df_to_save):
     """Writes the modified DataFrame back to GitHub"""
     try:
-        # Convert DF back to CSV string
-        # We must ensure Date format matches what the bot does (YYYY-MM-DD HH:MM:SS)
         df_copy = df_to_save.copy()
+        # Ensure Date format matches what the bot does (YYYY-MM-DD HH:MM:SS)
         df_copy['Date'] = pd.to_datetime(df_copy['Date']).dt.strftime("%Y-%m-%d %H:%M:%S")
         
         csv_buffer = io.StringIO()
         df_copy.to_csv(csv_buffer, index=False)
         new_content = csv_buffer.getvalue()
 
-        # Connect to GitHub
         auth = Auth.Token(GITHUB_TOKEN)
         g = Github(auth=auth)
         repo = g.get_repo(REPO_NAME)
         
-        # Get file SHA to update it
         contents = repo.get_contents(CSV_FILE_PATH)
         repo.update_file(contents.path, "Manual Update via Dashboard", new_content, contents.sha)
         
-        st.cache_data.clear() # Clear cache so changes show immediately
+        st.cache_data.clear()
         return True
     except Exception as e:
         st.error(f"Error saving to GitHub: {e}")
@@ -115,7 +112,6 @@ with tab1:
     if df_filtered.empty:
         st.info("No launches found for this period.")
     else:
-        # Metrics
         curr_pages = df_filtered['Page_Count'].sum()
         curr_launches = len(df_filtered)
         curr_retailers = df_filtered['Retailer'].nunique()
@@ -180,10 +176,7 @@ with tab4:
             submitted = st.form_submit_button("Add Launch")
             
             if submitted:
-                # Construct datetime
                 full_datetime = datetime.combine(new_date, new_time)
-                
-                # Create new row
                 new_row = pd.DataFrame([{
                     "Date": full_datetime,
                     "Retailer": new_retailer,
@@ -192,11 +185,7 @@ with tab4:
                     "Approver": new_approver,
                     "Slack_Link": "Manual Entry"
                 }])
-                
-                # Append to existing DF
                 updated_df = pd.concat([df, new_row], ignore_index=True)
-                
-                # Save
                 if save_data_to_github(updated_df):
                     st.success("✅ Launch added successfully! Refreshing...")
                     st.rerun()
@@ -205,24 +194,20 @@ with tab4:
     st.write("### ✏️ Edit or Delete Rows")
     st.info("Select rows and press 'Delete' on your keyboard to remove them. Double click cells to edit.")
     
-    # We use the FULL dataframe here (not filtered) so you can manage everything
-    # Sort by date descending so newest are at top
     df_sorted = df.sort_values("Date", ascending=False)
     
     edited_df = st.data_editor(
         df_sorted,
-        num_rows="dynamic", # Allows adding/deleting rows
+        num_rows="dynamic",
         use_container_width=True,
         column_config={
             "Date": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
-            "Retailer": st.column_config.SelectColumn(options=all_retailers),
+            "Retailer": st.column_config.SelectboxColumn(options=all_retailers),
         },
         key="data_editor"
     )
 
-    # Button to commit changes
     if st.button("💾 Save Changes to GitHub"):
-        # Check if actually changed
         if not edited_df.equals(df_sorted):
             if save_data_to_github(edited_df):
                 st.success("✅ Database updated successfully!")
