@@ -1,29 +1,29 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import requests
 import io
 import os
+from github import Github, Auth # We need this to WRITE to GitHub
 import config
 
 # --- CONFIGURATION ---
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-CSV_URL = "https://raw.githubusercontent.com/satvik-adeptmind/launch-tracker/main/launches.csv"
+REPO_NAME = "satvik-adeptmind/launch-tracker" # Update if your repo name is different
+CSV_FILE_PATH = "launches.csv"
+CSV_URL = f"https://raw.githubusercontent.com/satvik-adeptmind/launch-tracker/main/{CSV_FILE_PATH}"
 
 st.set_page_config(page_title="Launch Analytics", page_icon="🚀", layout="wide")
 
-# --- CUSTOM CSS FOR METRICS ---
+# --- CUSTOM CSS ---
 st.markdown("""
 <style>
-    [data-testid="stMetricValue"] {
-        font-size: 2rem;
-    }
+    [data-testid="stMetricValue"] { font-size: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- LOAD DATA ---
+# --- HELPER: LOAD DATA ---
 @st.cache_data(ttl=60)
 def load_data():
     try:
@@ -33,13 +33,40 @@ def load_data():
             csv_content = response.content.decode('utf-8')
             df = pd.read_csv(io.StringIO(csv_content))
             df['Date'] = pd.to_datetime(df['Date'])
-            # Ensure numeric
             df['Page_Count'] = pd.to_numeric(df['Page_Count'], errors='coerce').fillna(0)
             return df
         else:
             return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
     except Exception:
         return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
+
+# --- HELPER: SAVE DATA ---
+def save_data_to_github(df_to_save):
+    """Writes the modified DataFrame back to GitHub"""
+    try:
+        # Convert DF back to CSV string
+        # We must ensure Date format matches what the bot does (YYYY-MM-DD HH:MM:SS)
+        df_copy = df_to_save.copy()
+        df_copy['Date'] = pd.to_datetime(df_copy['Date']).dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        csv_buffer = io.StringIO()
+        df_copy.to_csv(csv_buffer, index=False)
+        new_content = csv_buffer.getvalue()
+
+        # Connect to GitHub
+        auth = Auth.Token(GITHUB_TOKEN)
+        g = Github(auth=auth)
+        repo = g.get_repo(REPO_NAME)
+        
+        # Get file SHA to update it
+        contents = repo.get_contents(CSV_FILE_PATH)
+        repo.update_file(contents.path, "Manual Update via Dashboard", new_content, contents.sha)
+        
+        st.cache_data.clear() # Clear cache so changes show immediately
+        return True
+    except Exception as e:
+        st.error(f"Error saving to GitHub: {e}")
+        return False
 
 df = load_data()
 
@@ -49,10 +76,10 @@ time_frame = st.sidebar.selectbox("Time Period", ["This Week", "Last Week", "Thi
 all_retailers = sorted(config.RETAILERS.keys())
 selected_retailers = st.sidebar.multiselect("Select Retailers", options=all_retailers, default=all_retailers)
 
-# --- DATE LOGIC & FILTERING ---
+# --- DATE LOGIC ---
 today = datetime.now()
 start_date = df['Date'].min() if not df.empty else today
-previous_start_date = start_date # For delta calculation
+previous_start_date = start_date 
 
 if time_frame == "This Week":
     start_date = today - timedelta(days=today.weekday())
@@ -67,13 +94,11 @@ elif time_frame == "This Month":
 
 # Apply Filters
 if not df.empty:
-    # Current Period Data
     mask = (df['Date'] >= start_date) & (df['Retailer'].isin(selected_retailers))
     if time_frame == "Last Week":
         mask = mask & (df['Date'] < end_date)
     df_filtered = df[mask]
-
-    # Previous Period Data (For Delta Comparison)
+    
     prev_mask = (df['Date'] >= previous_start_date) & (df['Date'] < start_date) & (df['Retailer'].isin(selected_retailers))
     df_prev = df[prev_mask]
 else:
@@ -83,80 +108,124 @@ else:
 # --- MAIN DASHBOARD ---
 st.title(f"🚀 Dashboard: {time_frame}")
 
-if df_filtered.empty:
-    st.info("No launches found for this period.")
-else:
-    # --- 1. KPI METRICS WITH DELTAS ---
-    # Calculate current metrics
-    curr_pages = df_filtered['Page_Count'].sum()
-    curr_launches = len(df_filtered)
-    curr_retailers = df_filtered['Retailer'].nunique()
+# --- TABS ---
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Trends", "ℹ️ Schedules", "📝 Logs", "🛠 Manage Data"])
 
-    # Calculate previous metrics
-    prev_pages = df_prev['Page_Count'].sum()
-    prev_launches = len(df_prev)
-    
-    # Calculate Deltas
-    delta_pages = curr_pages - prev_pages
-    delta_launches = curr_launches - prev_launches
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Pages", f"{int(curr_pages):,}", delta=f"{int(delta_pages)} vs prev")
-    c2.metric("Total Launches", curr_launches, delta=f"{delta_launches} vs prev")
-    c3.metric("Active Retailers", curr_retailers)
-    
-    # Average Pages per Launch
-    avg_pages = int(curr_pages / curr_launches) if curr_launches > 0 else 0
-    c4.metric("Avg Pages / Launch", avg_pages)
-
-    st.markdown("---")
-
-    # --- 2. TABS FOR DIFFERENT VIEWS ---
-    # Removed "Team Stats" and replaced with "Schedules & Info"
-    tab1, tab2, tab3 = st.tabs(["📊 Trends & Volume", "ℹ️ Schedules & Info", "📝 Detailed Logs"])
-
-    with tab1:
-        col1, col2 = st.columns([2, 1])
+with tab1:
+    if df_filtered.empty:
+        st.info("No launches found for this period.")
+    else:
+        # Metrics
+        curr_pages = df_filtered['Page_Count'].sum()
+        curr_launches = len(df_filtered)
+        curr_retailers = df_filtered['Retailer'].nunique()
         
+        prev_pages = df_prev['Page_Count'].sum()
+        prev_launches = len(df_prev)
+        
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Pages", f"{int(curr_pages):,}", delta=f"{int(curr_pages - prev_pages)}")
+        c2.metric("Total Launches", curr_launches, delta=f"{curr_launches - prev_launches}")
+        c3.metric("Active Retailers", curr_retailers)
+        c4.metric("Avg Pages", int(curr_pages / curr_launches) if curr_launches > 0 else 0)
+        
+        st.markdown("---")
+        
+        col1, col2 = st.columns([2, 1])
         with col1:
-            st.subheader("📅 Launch Activity Over Time")
-            # Group by Day
             daily_counts = df_filtered.groupby(df_filtered['Date'].dt.date).size().reset_index(name='Launches')
             fig_timeline = px.bar(daily_counts, x='Date', y='Launches', title="Daily Launch Frequency", color_discrete_sequence=['#00CC96'])
             st.plotly_chart(fig_timeline, use_container_width=True)
-
         with col2:
-            st.subheader("📦 Volume by Retailer")
-            # Group by Retailer
             retailer_counts = df_filtered.groupby('Retailer')['Page_Count'].sum().reset_index().sort_values('Page_Count', ascending=True)
             fig_retailer = px.bar(retailer_counts, x='Page_Count', y='Retailer', orientation='h', text_auto='.2s', color='Page_Count', color_continuous_scale='Bluered')
             fig_retailer.update_layout(showlegend=False)
             st.plotly_chart(fig_retailer, use_container_width=True)
 
-    with tab2:
-        st.subheader("ℹ️ Retailer Schedules & Notes")
-        st.markdown("Specific notes defined in `config.py` for the selected retailers.")
-        
-        # Display the config info
-        schedule_data = []
-        for r in selected_retailers:
-            if r in config.RETAILER_INFO:
-                schedule_data.append({"Retailer": r, "Schedule/Note": config.RETAILER_INFO[r]})
-        
-        if schedule_data:
-            st.dataframe(pd.DataFrame(schedule_data), hide_index=True, use_container_width=True)
-        else:
-            st.info("No specific schedule notes found for the currently selected retailers.")
+with tab2:
+    st.subheader("ℹ️ Retailer Schedules")
+    schedule_data = [{"Retailer": r, "Schedule/Note": config.RETAILER_INFO.get(r, "Monthly")} for r in selected_retailers]
+    st.dataframe(pd.DataFrame(schedule_data), hide_index=True, use_container_width=True)
 
-    with tab3:
-        st.subheader("📝 Launch Logs")
-        
-        st.dataframe(
-            df_filtered.sort_values("Date", ascending=False),
-            column_config={
-                "Slack_Link": st.column_config.LinkColumn("Slack Link", display_text="View Msg"),
-                "Date": st.column_config.DatetimeColumn("Launch Date", format="D MMM, HH:mm"),
-                "Page_Count": st.column_config.NumberColumn("Pages", format="%d 📄"),
-            },
-            use_container_width=True
-        )
+with tab3:
+    st.subheader("📝 Launch Logs (Read Only)")
+    st.dataframe(
+        df_filtered.sort_values("Date", ascending=False),
+        column_config={
+            "Slack_Link": st.column_config.LinkColumn("Link", display_text="View"),
+            "Date": st.column_config.DatetimeColumn("Date", format="D MMM, HH:mm"),
+            "Page_Count": st.column_config.NumberColumn("Pages", format="%d 📄"),
+        },
+        use_container_width=True
+    )
+
+with tab4:
+    st.subheader("🛠 Manage Data")
+    st.warning("⚠️ Changes made here will permanently update the CSV on GitHub.")
+    
+    # 1. ADD NEW ENTRY FORM
+    with st.expander("➕ Add Missing Launch"):
+        with st.form("add_launch_form"):
+            c1, c2 = st.columns(2)
+            new_retailer = c1.selectbox("Retailer", options=all_retailers)
+            new_tranche = c2.text_input("Tranche (e.g., T1)", value="T1")
+            
+            c3, c4 = st.columns(2)
+            new_pages = c3.number_input("Page Count", min_value=0, value=0)
+            new_approver = c4.text_input("Approver Name", value="Manual Admin")
+            
+            new_date = st.date_input("Date", value=datetime.now())
+            new_time = st.time_input("Time", value=datetime.now().time())
+            
+            submitted = st.form_submit_button("Add Launch")
+            
+            if submitted:
+                # Construct datetime
+                full_datetime = datetime.combine(new_date, new_time)
+                
+                # Create new row
+                new_row = pd.DataFrame([{
+                    "Date": full_datetime,
+                    "Retailer": new_retailer,
+                    "Tranche": new_tranche,
+                    "Page_Count": new_pages,
+                    "Approver": new_approver,
+                    "Slack_Link": "Manual Entry"
+                }])
+                
+                # Append to existing DF
+                updated_df = pd.concat([df, new_row], ignore_index=True)
+                
+                # Save
+                if save_data_to_github(updated_df):
+                    st.success("✅ Launch added successfully! Refreshing...")
+                    st.rerun()
+
+    # 2. EDIT/DELETE EXISTING DATA
+    st.write("### ✏️ Edit or Delete Rows")
+    st.info("Select rows and press 'Delete' on your keyboard to remove them. Double click cells to edit.")
+    
+    # We use the FULL dataframe here (not filtered) so you can manage everything
+    # Sort by date descending so newest are at top
+    df_sorted = df.sort_values("Date", ascending=False)
+    
+    edited_df = st.data_editor(
+        df_sorted,
+        num_rows="dynamic", # Allows adding/deleting rows
+        use_container_width=True,
+        column_config={
+            "Date": st.column_config.DatetimeColumn(format="YYYY-MM-DD HH:mm:ss"),
+            "Retailer": st.column_config.SelectColumn(options=all_retailers),
+        },
+        key="data_editor"
+    )
+
+    # Button to commit changes
+    if st.button("💾 Save Changes to GitHub"):
+        # Check if actually changed
+        if not edited_df.equals(df_sorted):
+            if save_data_to_github(edited_df):
+                st.success("✅ Database updated successfully!")
+                st.rerun()
+        else:
+            st.info("No changes detected.")
