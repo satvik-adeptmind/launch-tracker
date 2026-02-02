@@ -23,33 +23,24 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- HELPER: LOAD DATA (With Improved Error Handling) ---
+# --- HELPER: LOAD DATA ---
 @st.cache_data(ttl=60)
 def load_data():
-    """
-    Fetches and parses the CSV from GitHub.
-    Now includes detailed error logging and user-facing messages.
-    """
-    st.write("Attempting to load data from GitHub...") # Temporary message for debugging
     try:
         headers = {"Authorization": f"token {GITHUB_TOKEN}"}
         response = requests.get(CSV_URL, headers=headers)
 
-        # NEW: Check for specific HTTP errors (like wrong token)
         if response.status_code != 200:
             st.error(f"GitHub Error: Could not access the CSV file (Status: {response.status_code}).")
             st.warning("Please check your GITHUB_TOKEN secret in the Streamlit app settings.")
             return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
 
-        # If successful, parse the data
         csv_content = response.content.decode('utf-8')
         df = pd.read_csv(io.StringIO(csv_content))
         df['Date'] = pd.to_datetime(df['Date'])
         df['Page_Count'] = pd.to_numeric(df['Page_Count'], errors='coerce').fillna(0)
-        st.write("Data loaded successfully.") # Temporary message for debugging
         return df
 
-    # NEW: Catch parsing errors specifically
     except Exception as e:
         st.error(f"Parsing Error: The launches.csv file might be corrupted.")
         st.warning(f"Please check the file format on GitHub. Details: {e}")
@@ -81,26 +72,23 @@ def save_data_to_github(df_to_save):
 # --- SIDEBAR ---
 st.sidebar.header("🔍 Filters")
 
-# NEW: Added a manual refresh button
+# CHANGED: Removed st.rerun() for stability
 if st.sidebar.button("🔄 Force Refresh Data"):
     st.cache_data.clear()
-    st.rerun()
+    st.sidebar.success("Cache cleared! Change a filter to see updates.")
 
 time_frame = st.sidebar.selectbox("Time Period", ["This Week", "Last Week", "This Month", "All Time"])
 all_retailers = sorted(config.RETAILERS.keys())
 selected_retailers = st.sidebar.multiselect("Select Retailers", options=all_retailers, default=all_retailers)
 
-
 # --- Load Data (main call) ---
 df = load_data()
-
 
 # --- DATE LOGIC ---
 today = datetime.now()
 start_date = df['Date'].min() if not df.empty else today
 previous_start_date = start_date
 
-# ... (The rest of the file is the same as before) ...
 if time_frame == "This Week":
     start_date = today - timedelta(days=today.weekday())
     previous_start_date = start_date - timedelta(days=7)
