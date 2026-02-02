@@ -10,9 +10,9 @@ import config
 
 # --- CONFIGURATION ---
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-REPO_NAME = "satvik-adeptmind/launch-tracker" 
+REPO_NAME = "satvik-adeptmind/launch-tracker"
 CSV_FILE_PATH = "launches.csv"
-CSV_URL = f"https://raw.githubusercontent.com/satvik-adeptmind/launch-tracker/main/{CSV_FILE_PATH}"
+CSV_URL = f"https://raw.githubusercontent.com/{REPO_NAME}/main/{CSV_FILE_PATH}"
 
 st.set_page_config(page_title="Launch Analytics", page_icon="🚀", layout="wide")
 
@@ -23,29 +23,42 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- HELPER: LOAD DATA ---
+# --- HELPER: LOAD DATA (With Improved Error Handling) ---
 @st.cache_data(ttl=60)
 def load_data():
+    """
+    Fetches and parses the CSV from GitHub.
+    Now includes detailed error logging and user-facing messages.
+    """
+    st.write("Attempting to load data from GitHub...") # Temporary message for debugging
     try:
         headers = {"Authorization": f"token {GITHUB_TOKEN}"}
         response = requests.get(CSV_URL, headers=headers)
-        if response.status_code == 200:
-            csv_content = response.content.decode('utf-8')
-            df = pd.read_csv(io.StringIO(csv_content))
-            df['Date'] = pd.to_datetime(df['Date'])
-            df['Page_Count'] = pd.to_numeric(df['Page_Count'], errors='coerce').fillna(0)
-            return df
-        else:
+
+        # NEW: Check for specific HTTP errors (like wrong token)
+        if response.status_code != 200:
+            st.error(f"GitHub Error: Could not access the CSV file (Status: {response.status_code}).")
+            st.warning("Please check your GITHUB_TOKEN secret in the Streamlit app settings.")
             return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
-    except Exception:
+
+        # If successful, parse the data
+        csv_content = response.content.decode('utf-8')
+        df = pd.read_csv(io.StringIO(csv_content))
+        df['Date'] = pd.to_datetime(df['Date'])
+        df['Page_Count'] = pd.to_numeric(df['Page_Count'], errors='coerce').fillna(0)
+        st.write("Data loaded successfully.") # Temporary message for debugging
+        return df
+
+    # NEW: Catch parsing errors specifically
+    except Exception as e:
+        st.error(f"Parsing Error: The launches.csv file might be corrupted.")
+        st.warning(f"Please check the file format on GitHub. Details: {e}")
         return pd.DataFrame(columns=["Date", "Retailer", "Tranche", "Page_Count", "Approver", "Slack_Link"])
 
 # --- HELPER: SAVE DATA ---
 def save_data_to_github(df_to_save):
-    """Writes the modified DataFrame back to GitHub"""
     try:
         df_copy = df_to_save.copy()
-        # Ensure Date format matches what the bot does (YYYY-MM-DD HH:MM:SS)
         df_copy['Date'] = pd.to_datetime(df_copy['Date']).dt.strftime("%Y-%m-%d %H:%M:%S")
         
         csv_buffer = io.StringIO()
@@ -65,19 +78,29 @@ def save_data_to_github(df_to_save):
         st.error(f"Error saving to GitHub: {e}")
         return False
 
-df = load_data()
-
-# --- SIDEBAR FILTERS ---
+# --- SIDEBAR ---
 st.sidebar.header("🔍 Filters")
+
+# NEW: Added a manual refresh button
+if st.sidebar.button("🔄 Force Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
 time_frame = st.sidebar.selectbox("Time Period", ["This Week", "Last Week", "This Month", "All Time"])
 all_retailers = sorted(config.RETAILERS.keys())
 selected_retailers = st.sidebar.multiselect("Select Retailers", options=all_retailers, default=all_retailers)
 
+
+# --- Load Data (main call) ---
+df = load_data()
+
+
 # --- DATE LOGIC ---
 today = datetime.now()
 start_date = df['Date'].min() if not df.empty else today
-previous_start_date = start_date 
+previous_start_date = start_date
 
+# ... (The rest of the file is the same as before) ...
 if time_frame == "This Week":
     start_date = today - timedelta(days=today.weekday())
     previous_start_date = start_date - timedelta(days=7)
@@ -115,7 +138,6 @@ with tab1:
         curr_pages = df_filtered['Page_Count'].sum()
         curr_launches = len(df_filtered)
         curr_retailers = df_filtered['Retailer'].nunique()
-        
         prev_pages = df_prev['Page_Count'].sum()
         prev_launches = len(df_prev)
         
@@ -159,7 +181,6 @@ with tab4:
     st.subheader("🛠 Manage Data")
     st.warning("⚠️ Changes made here will permanently update the CSV on GitHub.")
     
-    # 1. ADD NEW ENTRY FORM
     with st.expander("➕ Add Missing Launch"):
         with st.form("add_launch_form"):
             c1, c2 = st.columns(2)
@@ -177,25 +198,16 @@ with tab4:
             
             if submitted:
                 full_datetime = datetime.combine(new_date, new_time)
-                new_row = pd.DataFrame([{
-                    "Date": full_datetime,
-                    "Retailer": new_retailer,
-                    "Tranche": new_tranche,
-                    "Page_Count": new_pages,
-                    "Approver": new_approver,
-                    "Slack_Link": "Manual Entry"
-                }])
+                new_row = pd.DataFrame([{"Date": full_datetime, "Retailer": new_retailer, "Tranche": new_tranche, "Page_Count": new_pages, "Approver": new_approver, "Slack_Link": "Manual Entry"}])
                 updated_df = pd.concat([df, new_row], ignore_index=True)
                 if save_data_to_github(updated_df):
                     st.success("✅ Launch added successfully! Refreshing...")
                     st.rerun()
 
-    # 2. EDIT/DELETE EXISTING DATA
     st.write("### ✏️ Edit or Delete Rows")
     st.info("Select rows and press 'Delete' on your keyboard to remove them. Double click cells to edit.")
     
     df_sorted = df.sort_values("Date", ascending=False)
-    
     edited_df = st.data_editor(
         df_sorted,
         num_rows="dynamic",
