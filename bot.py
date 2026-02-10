@@ -111,7 +111,7 @@ def update_github_csv(new_row_list):
     return False
 
 # --- SLACK LOGIC ---
-@app.message(re.compile("prod", re.IGNORECASE))
+@app.message(re.compile(r"\d+\s*pages?.*pushed\s+to\s+prod", re.IGNORECASE | re.DOTALL))
 def handle_prod_message(message, say):
     text = message.get('text', '')
     user_id = message['user']
